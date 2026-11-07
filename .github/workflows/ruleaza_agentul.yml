@@ -1,0 +1,30 @@
+name: Ruleaza Agentul Outlook-Gemini
+
+on:
+  schedule:
+    # Rulează automat din oră în oră
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permite și rularea manuală din buton
+
+jobs:
+  ruleaza-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preia codul
+        uses: actions/checkout@v3
+
+      - name: Instalează Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalează dependințele
+        run: pip install -r requirements.txt
+
+      - name: Rulează Agentul
+        env:
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python agent.py
