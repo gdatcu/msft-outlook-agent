@@ -2,29 +2,29 @@ name: Ruleaza Agentul Outlook-Gemini
 
 on:
   schedule:
-    # Rulează automat din oră în oră
     - cron: '0 * * * *'
-  workflow_dispatch: # Permite și rularea manuală din buton
+  workflow_dispatch: 
 
 jobs:
   ruleaza-script:
     runs-on: ubuntu-latest
     steps:
       - name: Preia codul
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Am actualizat la v4 pentru a scăpa de avertismentele Node.js
 
       - name: Instalează Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Am actualizat la v5
         with:
-          python-version: '3.10'
+          python-version: '3.11' # Am trecut la Python 3.11 cerut de Google
 
       - name: Instalează dependințele
         run: pip install -r requirements.txt
 
       - name: Rulează Agentul
         env:
+          PYTHONUNBUFFERED: 1 # Forțează afișarea textului în timp real
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python agent.py
+        run: python -u agent.py # Am adăugat parametrul -u (unbuffered)
