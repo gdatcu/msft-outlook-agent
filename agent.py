@@ -25,7 +25,7 @@ if "access_token" in token_response:
     headers = {'Authorization': f'Bearer {access_token}'}
     
     # 3. Citirea ultimelor 5 emailuri din Inbox
-    endpoint = "https://graph.microsoft.com/v1.0/users/MAILUL_TAU@outlook.com/messages?$top=5"
+    endpoint = "https://graph.microsoft.com/v1.0/users/george.datcu@hotmail.com/messages?$top=5"
     response = requests.get(endpoint, headers=headers)
     emailuri = response.json().get('value', [])
     
