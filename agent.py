@@ -7,38 +7,38 @@ CLIENT_ID = os.environ["MS_CLIENT_ID"]
 REFRESH_TOKEN = os.environ["MS_REFRESH_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
-# Inițializăm noul client Google
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
-# 🧠 LOGICA INTELIGENTĂ (ADAPTATĂ PENTRU NOUL SDK)
+# 🧠 LOGICA SUPER-INTELIGENTĂ DE ALEGERE ȘI TESTARE
 # ==========================================
+print("🔍 Căutăm și testăm modelele disponibile...")
+
+# Extragem doar modelele care conțin "gemini"
+toate_modelele = [m.name for m in client.models.list() if 'gemini' in m.name.lower()]
+
+# Sortăm descrescător ca să luăm versiunile noi primele (ex: 3.8 înaintea lui 2.5)
+modele_flash = sorted([m for m in toate_modelele if 'flash' in m.lower()], reverse=True)
+modele_restul = sorted([m for m in toate_modelele if m not in modele_flash], reverse=True)
+modele_de_incercat = modele_flash + modele_restul
+
 model_ales = None
-toate_modelele = []
 
-# Cerem lista live de la Google
-for m in client.models.list():
-    nume = m.name.lower()
-    toate_modelele.append(m.name)
-    
-    # Căutăm cel mai bun model din seria "flash"
-    if 'gemini' in nume and 'flash' in nume:
-        model_ales = m.name
-        break # Am găsit varianta optimă, oprim căutarea
+for nume_model in modele_de_incercat:
+    try:
+        # Facem un test rapid (ping) ca să vedem dacă Google ne dă voie să-l folosim
+        client.models.generate_content(model=nume_model, contents="salut")
+        model_ales = nume_model
+        break # Dacă a mers fără eroare, ne oprim. Acesta e modelul bun!
+    except Exception:
+        # Dacă Google ne dă 404 sau altă eroare, trecem silențios la următorul
+        continue
 
-# Dacă nu există "flash", ia primul model "gemini" disponibil
 if not model_ales:
-    for nume in toate_modelele:
-        if 'gemini' in nume.lower():
-            model_ales = nume
-            break
-
-# Dacă lista e complet goală sau nu recunoaște nimic, printăm diagnosticul
-if not model_ales:
-    print(f"❌ Eroare: Nu am găsit modele Gemini. Lista completă primită de la Google este: {toate_modelele}")
+    print(f"❌ Eroare critică: Google a respins accesul la absolut toate modelele. Lista: {toate_modelele}")
     exit(1)
 
-print(f"🧠 Agentul a scanat serverele Google și a ales automat modelul: {model_ales}\n" + "="*40)
+print(f"🧠 Agentul a testat cu succes și a validat modelul: {model_ales}\n" + "="*40)
 
 
 # ==========================================
@@ -75,7 +75,7 @@ if "access_token" in token_response:
             try:
                 print(f"📧 Subiect Original: {subiect}")
                 
-                # Trimitem către modelul ales dinamic
+                # Trimitem către modelul validat
                 raspuns = client.models.generate_content(
                     model=model_ales,
                     contents=prompt
