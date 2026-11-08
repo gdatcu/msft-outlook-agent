@@ -10,22 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Preia codul
-        uses: actions/checkout@v4 # Am actualizat la v4 pentru a scăpa de avertismentele Node.js
+        uses: actions/checkout@v4
 
       - name: Instalează Python
-        uses: actions/setup-python@v5 # Am actualizat la v5
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Am trecut la Python 3.11 cerut de Google
+          python-version: '3.11'
+
+      # === PASUL NOU: Forțăm rețeaua stabilă (IPv4) ===
+      - name: Dezactivează IPv6 pentru a preveni blocajele Google API
+        run: |
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
 
       - name: Instalează dependințele
         run: pip install -r requirements.txt
 
       - name: Rulează Agentul
         env:
-          PYTHONUNBUFFERED: 1 # Forțează afișarea textului în timp real
+          PYTHONUNBUFFERED: 1
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MS_REFRESH_TOKEN: ${{ secrets.MS_REFRESH_TOKEN }}
-        run: python -u agent.py # Am adăugat parametrul -u (unbuffered)
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -u agent.py
