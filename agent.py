@@ -11,33 +11,31 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
-# 🧠 LOGICA INTELIGENTĂ DE ALEGERE A MODELULUI
+# 🧠 LOGICA INTELIGENTĂ (ADAPTATĂ PENTRU NOUL SDK)
 # ==========================================
 model_ales = None
-model_de_rezerva = None
+toate_modelele = []
 
 # Cerem lista live de la Google
-lista_modele = client.models.list()
-
-for model in lista_modele:
-    # Verificăm dacă modelul știe să facă text (generateContent)
-    metode_suportate = getattr(model, 'supported_generation_methods', [])
+for m in client.models.list():
+    nume = m.name.lower()
+    toate_modelele.append(m.name)
     
-    if 'generateContent' in metode_suportate:
-        # Preferăm un model din gama "flash" (mai rapid și perfect pentru rezumate)
-        if 'flash' in model.name.lower():
-            model_ales = model.name
-            break # Am găsit varianta optimă, ne oprim din căutat
-        elif model_de_rezerva is None:
-            # Păstrăm primul model valid găsit ca rezervă
-            model_de_rezerva = model.name
+    # Căutăm cel mai bun model din seria "flash"
+    if 'gemini' in nume and 'flash' in nume:
+        model_ales = m.name
+        break # Am găsit varianta optimă, oprim căutarea
 
-# Dacă nu a găsit "flash", folosește ce a găsit valid
+# Dacă nu există "flash", ia primul model "gemini" disponibil
 if not model_ales:
-    model_ales = model_de_rezerva
+    for nume in toate_modelele:
+        if 'gemini' in nume.lower():
+            model_ales = nume
+            break
 
+# Dacă lista e complet goală sau nu recunoaște nimic, printăm diagnosticul
 if not model_ales:
-    print("❌ Eroare: Nu am găsit niciun model valid pentru generare text pe această cheie API.")
+    print(f"❌ Eroare: Nu am găsit modele Gemini. Lista completă primită de la Google este: {toate_modelele}")
     exit(1)
 
 print(f"🧠 Agentul a scanat serverele Google și a ales automat modelul: {model_ales}\n" + "="*40)
@@ -77,7 +75,7 @@ if "access_token" in token_response:
             try:
                 print(f"📧 Subiect Original: {subiect}")
                 
-                # Trimitem către modelul ales dinamic mai sus
+                # Trimitem către modelul ales dinamic
                 raspuns = client.models.generate_content(
                     model=model_ales,
                     contents=prompt
