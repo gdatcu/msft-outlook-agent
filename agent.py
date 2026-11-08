@@ -4,129 +4,117 @@ import requests
 import msal
 from google import genai
 import concurrent.futures
+from datetime import datetime, timedelta, timezone # Adăugat pentru calculul timpului
 
 CLIENT_ID = os.environ["MS_CLIENT_ID"]
 REFRESH_TOKEN = os.environ["MS_REFRESH_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
 
 client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
 # 🧠 CĂUTARE MODELE CU RETRY ȘI TIMEOUT
 # ==========================================
-print("🔍 Căutăm și testăm modelele disponibile...")
-
 def preia_lista_modele():
     return list(client.models.list())
 
 lista_raw = None
-for incercare in range(1, 4): # Încearcă de 3 ori
+for incercare in range(1, 4):
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             lista_raw = executor.submit(preia_lista_modele).result(timeout=15)
-        break # Succes, ieșim din bucla de reîncercare
+        break
     except concurrent.futures.TimeoutError:
-        print(f"⏳ Google API timeout la listare. Încercarea {incercare}/3...")
         time.sleep(2)
 
 if not lista_raw:
-    print("❌ Eroare: Serverul Google nu a răspuns la listare după 3 încercări. Renunțăm.")
+    print("❌ Eroare: Serverul Google a picat. Renunțăm.")
     exit(1)
 
 toate_modelele = [m.name for m in lista_raw if 'gemini' in m.name.lower()]
 modele_flash = sorted([m for m in toate_modelele if 'flash' in m.lower()], reverse=True)
-modele_restul = sorted([m for m in toate_modelele if m not in modele_flash], reverse=True)
-modele_de_incercat = modele_flash + modele_restul
+modele_de_incercat = modele_flash + sorted([m for m in toate_modelele if m not in modele_flash], reverse=True)
 
 model_ales = None
-
-# La testare nu facem retry per model, ci trecem rapid la următorul din listă dacă dă timeout
 for nume_model in modele_de_incercat:
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Testăm trimițând un salut simplu
-            viitor = executor.submit(lambda: client.models.generate_content(model=nume_model, contents="salut"))
-            viitor.result(timeout=5)
+            executor.submit(lambda: client.models.generate_content(model=nume_model, contents="salut")).result(timeout=5)
             model_ales = nume_model
-            break # Am validat modelul!
-    except concurrent.futures.TimeoutError:
-        print(f"⚠️ {nume_model} a dat timeout. Trecem la următorul...")
+            break
     except Exception:
-        # A dat eroare 404 sau altele (blocat de Google), sărim silențios
         pass
 
 if not model_ales:
-    print("❌ Eroare critică: Niciun model nu a trecut testul de funcționare.")
     exit(1)
-
-print(f"🧠 Agentul a validat modelul: {model_ales}\n" + "="*40)
-
 
 # ==========================================
 # 🔐 CONECTAREA LA MICROSOFT ȘI CITIREA EMAILURILOR
 # ==========================================
-app = msal.PublicClientApplication(
-    CLIENT_ID, 
-    authority="https://login.microsoftonline.com/consumers"
-)
-
+app = msal.PublicClientApplication(CLIENT_ID, authority="https://login.microsoftonline.com/consumers")
 token_response = app.acquire_token_by_refresh_token(REFRESH_TOKEN, scopes=["Mail.Read"])
 
 if "access_token" in token_response:
     headers = {'Authorization': f'Bearer {token_response["access_token"]}'}
-    endpoint = "https://graph.microsoft.com/v1.0/me/messages?$top=5"
     
-    # Retry pentru Microsoft Graph API
+    # Calculăm ora de acum 1 oră în format UTC (formatul cerut de Microsoft)
+    ora_limita = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    
+    # Interogăm DOAR emailurile care au data primirii (receivedDateTime) mai mare sau egală (ge) cu ora_limita
+    endpoint = f"https://graph.microsoft.com/v1.0/me/messages?$filter=receivedDateTime ge {ora_limita}"
+    
     response = None
     for incercare in range(1, 4):
         try:
             response = requests.get(endpoint, headers=headers, timeout=15)
             break
         except requests.exceptions.Timeout:
-            print(f"⏳ Microsoft timeout. Încercarea {incercare}/3...")
             time.sleep(2)
             
-    if not response:
-        print("❌ Eroare: Microsoft nu a răspuns după 3 încercări.")
+    if not response or response.status_code != 200:
         exit(1)
         
-    if response.status_code != 200:
-        print(f"❌ Eroare Microsoft: {response.status_code}\n{response.text}")
-    else:
-        emailuri = response.json().get('value', [])
+    emailuri = response.json().get('value', [])
+    if not emailuri:
+        print(f"Inbox gol în ultima oră (de la {ora_limita}).")
+        exit(0)
+    
+    # Construim raportul pentru Discord
+    mesaj_discord = f"🔔 **Raportul de emailuri (ultimele 60 de minute):**\n\n"
+    rezumate_valide = 0
+    
+    for email in emailuri:
+        subiect = email.get('subject', 'Fără subiect')
+        corp = email.get('bodyPreview', 'Fără conținut')
+        prompt = f"Asistent: Rezumă acest email într-o frază scurtă. Urgent sau nu?\nSubiect: {subiect}\nText: {corp}"
         
-        if not emailuri:
-            print("Inbox-ul este gol (nu ai emailuri noi).")
+        for incercare in range(1, 4):
+            try:
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    raspuns = executor.submit(lambda: client.models.generate_content(model=model_ales, contents=prompt)).result(timeout=10)
+                    
+                mesaj_discord += f"📧 **{subiect}**\n🤖 {raspuns.text}\n\n"
+                rezumate_valide += 1
+                break
+                
+            except concurrent.futures.TimeoutError:
+                time.sleep(2)
+            except Exception:
+                break 
+                
+    # ==========================================
+    # 🚀 TRIMITEREA CĂTRE DISCORD
+    # ==========================================
+    if rezumate_valide > 0 and DISCORD_WEBHOOK:
+        # Tăiem mesajul dacă depășește limita de 2000 caractere a Discord-ului
+        payload = {"content": mesaj_discord[:1990]}
         
-        for email in emailuri:
-            subiect = email.get('subject', 'Fără subiect')
-            corp = email.get('bodyPreview', 'Fără conținut')
-            prompt = f"Asistent: Rezumă acest email într-o frază scurtă. Urgent sau nu?\nSubiect: {subiect}\nText: {corp}"
-            
-            print(f"📧 Subiect Original: {subiect}")
-            
-            # Retry pentru generarea rezumatului cu Gemini
-            rezumat_generat = False
-            for incercare in range(1, 4):
-                try:
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        viitor = executor.submit(lambda: client.models.generate_content(model=model_ales, contents=prompt))
-                        raspuns = viitor.result(timeout=10)
-                        
-                    print(f"🤖 Analiza Gemini: {raspuns.text}\n{'-'*40}")
-                    rezumat_generat = True
-                    break # Succes, ieșim din loop-ul de reîncercări
-                    
-                except concurrent.futures.TimeoutError:
-                    print(f"   [⏳ Așteptăm Gemini... încercarea {incercare}/3]")
-                    time.sleep(2)
-                except Exception as e:
-                    print(f"❌ Eroare Gemini definitivă la acest email: {e}\n{'-'*40}")
-                    rezumat_generat = True # E o eroare internă a modelului (ex. text prea lung), nu are sens retry-ul
-                    break 
-                    
-            if not rezumat_generat:
-                print("⚠️ Am renunțat la acest email după 3 încercări (timeout).\n" + "-"*40)
-
-else:
-    print("❌ Eroare la reînnoirea token-ului Microsoft:", token_response.get("error_description"))
+        try:
+            req_discord = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+            if req_discord.status_code in [200, 204]:
+                print("✅ Raport trimis cu succes pe Discord!")
+            else:
+                print(f"❌ Eroare la trimiterea pe Discord: {req_discord.status_code}")
+        except Exception as e:
+            print(f"❌ Eroare de rețea către Discord: {e}")
