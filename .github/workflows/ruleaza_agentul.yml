@@ -27,4 +27,5 @@ jobs:
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MS_REFRESH_TOKEN: ${{ secrets.MS_REFRESH_TOKEN }}
         run: python -u agent.py # Am adăugat parametrul -u (unbuffered)
