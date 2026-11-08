@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 # ==========================================
 # ⚙️ SETĂRI GENERALE ȘI PERSONALIZARE
 # ==========================================
-INTERVAL_MINUTE = 15
+INTERVAL_MINUTE = 10 # <-- Frecvența din cron-job.org
 
 REGULI_ASISTENT = """
 Ești asistentul meu executiv personal. Analizează emailul de mai jos și oferă un răspuns scurt, formatat exact așa:
@@ -31,23 +31,29 @@ REFRESH_TOKEN = os.environ["MS_REFRESH_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
 
-print("🚀 START AGENT EXECUTIV (Multithreaded + Smart Reply)...")
+print("🚀 START AGENT EXECUTIV (Ultra-Optimizat)...")
 
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
+# ==========================================
+# 1. VERIFICARE MICROSOFT (CU ALERTĂ DISCORD)
+# ==========================================
 print("🔐 Ne conectăm la Microsoft Graph...")
 app = msal.PublicClientApplication(CLIENT_ID, authority="https://login.microsoftonline.com/consumers")
 token_response = app.acquire_token_by_refresh_token(REFRESH_TOKEN, scopes=["Mail.Read"])
 
 if "access_token" not in token_response:
-    print("❌ Eroare conectare Microsoft.")
+    print("❌ Eroare: Token-ul Microsoft a expirat sau este invalid.")
+    if DISCORD_WEBHOOK:
+        requests.post(DISCORD_WEBHOOK, json={"content": "⚠️ **Alerta Agent:** Accesul la contul Outlook a fost revocat sau token-ul a expirat. Te rog să generezi un nou `MS_REFRESH_TOKEN` și să îl actualizezi în GitHub Secrets!"}, timeout=5)
     os._exit(1)
 
 headers = {'Authorization': f'Bearer {token_response["access_token"]}'}
 ora_limita = (datetime.now(timezone.utc) - timedelta(minutes=INTERVAL_MINUTE)).strftime('%Y-%m-%dT%H:%M:%SZ')
 print(f"📅 Căutăm emailuri de la ora: {ora_limita}")
 
-endpoint = f"https://graph.microsoft.com/v1.0/me/messages?$filter=receivedDateTime ge {ora_limita}"
+# 🔥 ÎMBUNĂTĂȚIRE 1: Citim STRICT din Inbox (ignorăm Sent, Trash, Junk) și tragem maxim 50 de mesaje odată
+endpoint = f"https://graph.microsoft.com/v1.0/me/mailFolders('inbox')/messages?$filter=receivedDateTime ge {ora_limita}&$top=50"
 
 response = None
 for incercare in range(1, 4):
@@ -58,7 +64,7 @@ for incercare in range(1, 4):
         time.sleep(2)
         
 if not response or response.status_code != 200:
-    print("❌ Eroare la citirea emailurilor.")
+    print("❌ Eroare la citirea emailurilor de la Microsoft.")
     os._exit(1)
     
 emailuri = response.json().get('value', [])
@@ -68,6 +74,9 @@ if not emailuri:
 
 print(f"📥 Am găsit {len(emailuri)} email(uri) nou(i)! Pornim AI-ul...")
 
+# ==========================================
+# 2. INIȚIALIZARE ȘI VALIDARE GEMINI
+# ==========================================
 client = genai.Client(api_key=GEMINI_KEY)
 lista_raw = None
 
@@ -98,15 +107,15 @@ for nume_model in modele_de_incercat:
 if not model_ales:
     os._exit(1)
 
+# ==========================================
+# 3. PROCESARE PARALELĂ
+# ==========================================
 print("⚡ Analizăm emailurile simultan...")
-mesaj_discord = f"🔔 **Raportul tău executiv (ultimele {INTERVAL_MINUTE} minute):**\n\n"
-rezumate_valide = 0
 
 def proceseaza_email_inteligent(email):
     subiect = email.get('subject', 'Fără subiect')
     corp = email.get('bodyPreview', 'Fără conținut')
     link_web = email.get('webLink', 'https://outlook.live.com/mail/0/inbox')
-    
     expeditor = email.get('from', {}).get('emailAddress', {}).get('address', '')
     
     if expeditor:
@@ -127,20 +136,43 @@ def proceseaza_email_inteligent(email):
     return ""
 
 viitor_rezumate = [executor.submit(proceseaza_email_inteligent, em) for em in emailuri]
+rezultate_colectate = []
 
 for viitor in concurrent.futures.as_completed(viitor_rezumate):
     rezultat = viitor.result(timeout=20)
     if rezultat:
-        mesaj_discord += rezultat
-        rezumate_valide += 1
+        rezultate_colectate.append(rezultat)
 
-if rezumate_valide > 0 and DISCORD_WEBHOOK:
+# ==========================================
+# 4. TRIMITERE INTELIGENTĂ PE DISCORD (PAGINARE)
+# ==========================================
+if rezultate_colectate and DISCORD_WEBHOOK:
     print("🚀 Trimitem raportul pe Discord...")
-    payload = {"content": mesaj_discord[:1990]}
-    try:
-        requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
-        print("✅ Gata!")
-    except Exception:
-        pass
+    
+    # 🔥 ÎMBUNĂTĂȚIRE 2: Spargem raportul în mai multe mesaje dacă depășește limita Discord (1900 caractere)
+    mesaje_de_trimis = []
+    mesaj_curent = f"🔔 **Raportul tău executiv (ultimele {INTERVAL_MINUTE} minute):**\n\n"
+    
+    for rez in rezultate_colectate:
+        # Verificăm dacă adăugarea acestui rezumat depășește limita de siguranță (1900 caractere)
+        if len(mesaj_curent) + len(rez) > 1900:
+            mesaje_de_trimis.append(mesaj_curent) # Salvăm pachetul plin
+            mesaj_curent = rez # Începem un pachet nou cu rezumatul curent
+        else:
+            mesaj_curent += rez
+            
+    # Adăugăm ultimul pachet rămas
+    if mesaj_curent.strip():
+        mesaje_de_trimis.append(mesaj_curent)
+        
+    # Trimitem pachetele pe rând
+    for msg in mesaje_de_trimis:
+        try:
+            requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+            time.sleep(1) # Pauză 1 secundă între mesaje pentru a nu fi blocați de Discord anti-spam
+        except Exception as e:
+            print(f"❌ Eroare la trimiterea unui segment pe Discord: {e}")
+
+    print("✅ Gata! Toate emailurile au fost raportate corect.")
 
 os._exit(0)
