@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 # ==========================================
 # ⚙️ SETĂRI GENERALE ȘI PERSONALIZARE
 # ==========================================
-INTERVAL_MINUTE = 10 # <-- Frecvența din cron-job.org
+INTERVAL_MINUTE = 10 # <-- Frecvența sincronizată cu cron-job.org
 
 REGULI_ASISTENT = """
 Ești asistentul meu executiv personal. Analizează emailul de mai jos și oferă un răspuns scurt, formatat exact așa:
@@ -52,7 +52,7 @@ headers = {'Authorization': f'Bearer {token_response["access_token"]}'}
 ora_limita = (datetime.now(timezone.utc) - timedelta(minutes=INTERVAL_MINUTE)).strftime('%Y-%m-%dT%H:%M:%SZ')
 print(f"📅 Căutăm emailuri de la ora: {ora_limita}")
 
-# 🔥 ÎMBUNĂTĂȚIRE 1: Citim STRICT din Inbox (ignorăm Sent, Trash, Junk) și tragem maxim 50 de mesaje odată
+# Citim STRICT din Inbox (ignorăm Sent, Trash, Junk) și tragem maxim 50 de mesaje odată
 endpoint = f"https://graph.microsoft.com/v1.0/me/mailFolders('inbox')/messages?$filter=receivedDateTime ge {ora_limita}&$top=50"
 
 response = None
@@ -115,7 +115,11 @@ print("⚡ Analizăm emailurile simultan...")
 def proceseaza_email_inteligent(email):
     subiect = email.get('subject', 'Fără subiect')
     corp = email.get('bodyPreview', 'Fără conținut')
-    link_web = email.get('webLink', 'https://outlook.live.com/mail/0/inbox')
+    
+    # Preia link-ul brut și elimină parametrii care blochează browserul Discord
+    link_brut = email.get('webLink', 'https://outlook.live.com/mail/0/inbox')
+    link_web = link_brut.replace("&exvsurl=1", "").replace("&viewmodel=ReadMessageItem", "")
+    
     expeditor = email.get('from', {}).get('emailAddress', {}).get('address', '')
     
     if expeditor:
@@ -149,29 +153,25 @@ for viitor in concurrent.futures.as_completed(viitor_rezumate):
 if rezultate_colectate and DISCORD_WEBHOOK:
     print("🚀 Trimitem raportul pe Discord...")
     
-    # 🔥 ÎMBUNĂTĂȚIRE 2: Spargem raportul în mai multe mesaje dacă depășește limita Discord (1900 caractere)
     mesaje_de_trimis = []
     mesaj_curent = f"🔔 **Raportul tău executiv (ultimele {INTERVAL_MINUTE} minute):**\n\n"
     
     for rez in rezultate_colectate:
-        # Verificăm dacă adăugarea acestui rezumat depășește limita de siguranță (1900 caractere)
         if len(mesaj_curent) + len(rez) > 1900:
-            mesaje_de_trimis.append(mesaj_curent) # Salvăm pachetul plin
-            mesaj_curent = rez # Începem un pachet nou cu rezumatul curent
+            mesaje_de_trimis.append(mesaj_curent)
+            mesaj_curent = rez 
         else:
             mesaj_curent += rez
             
-    # Adăugăm ultimul pachet rămas
     if mesaj_curent.strip():
         mesaje_de_trimis.append(mesaj_curent)
         
-    # Trimitem pachetele pe rând
     for msg in mesaje_de_trimis:
         try:
             requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
-            time.sleep(1) # Pauză 1 secundă între mesaje pentru a nu fi blocați de Discord anti-spam
+            time.sleep(1) # Pauză anti-spam pentru Discord
         except Exception as e:
-            print(f"❌ Eroare la trimiterea unui segment pe Discord: {e}")
+            print(f"❌ Eroare la trimiterea pe Discord: {e}")
 
     print("✅ Gata! Toate emailurile au fost raportate corect.")
 
